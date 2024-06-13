@@ -1,0 +1,34 @@
+#define WORD_SIZE 8
+#define TEMP_REGS @base + WORD_SIZE * 2
+
+/* Returns a % b, asuming b = x^n for some x and n */
+#define pnk_modulo(result, a, b) \
+    var pnk_modulo_mask = b - 1; \
+    var result = a & pnk_modulo_mask;
+
+/* Pancake's own 'memset' function */
+/* Sets every word in memory region [start, start + len) to w */
+// fun pnk_memset(1 start, 1 w, 1 len) {
+//     var cnt = 0;
+//     while (cnt < len) {
+//         !stw w, start  + cnt;
+//         cnt = cnt + 1;
+//     }
+//     return 0;
+// }
+
+/* FFI calls */
+#define THREAD_MEMORY_RELEASE() \
+    @THREAD_MEMORY_RELEASE(0, 1, 0, 1);
+
+#define ASSERT(assert_val) \
+    @ASSERT(0, assert_val, 0, 1);
+
+#define microkit_notify(ch) \
+    @microkit_notify(0, ch, 0, 1);
+
+#define microkit_irq_ack_delayed(ch) \
+    @microkit_irq_ack_delayed(0, ch, 0, 1);
+
+#define set_hw_regs(addr) \
+    @set_hw_regs(TEMP_REGS, 1, addr, 1);
