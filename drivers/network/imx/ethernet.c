@@ -11,12 +11,18 @@
 #include <sddf/util/fence.h>
 #include <sddf/util/printf.h>
 #include <ethernet_config.h>
-
 #include "ethernet.h"
 
 #define IRQ_CH 0
 #define TX_CH  1
 #define RX_CH  2
+
+#define RX_COUNT 256
+#define TX_COUNT 256
+#define MAX_COUNT MAX(RX_COUNT, TX_COUNT)
+
+_Static_assert((RX_COUNT + TX_COUNT) * 2 * NET_BUFFER_SIZE <= NET_DATA_REGION_SIZE,
+               "Expect rx+tx buffers to fit in single 2MB page");
 
 uintptr_t eth_regs;
 uintptr_t hw_ring_buffer_vaddr;
@@ -27,13 +33,48 @@ uintptr_t rx_active;
 uintptr_t tx_free;
 uintptr_t tx_active;
 
-#define RX_COUNT 256
-#define TX_COUNT 256
-#define MAX_COUNT MAX(RX_COUNT, TX_COUNT)
+/* For pancake */
+#define CML_HEAP_SZ 1024*1024
+#define CML_STACK_SZ 1024*1024
+#define CML_MEM_SZ CML_HEAP_SZ + CML_STACK_SZ
 
-_Static_assert((RX_COUNT + TX_COUNT) * 2 * NET_BUFFER_SIZE <= NET_DATA_REGION_SIZE,
-               "Expect rx+tx buffers to fit in single 2MB page");
+static char cml_memory[CML_MEM_SZ];
 
+extern void cml_main(void);
+extern void pnk_rx_provide(void);
+extern void pnk_rx_return(void);
+extern void pnk_tx_provide(void);
+extern void pnk_tx_return(void);
+extern void pnk_handle_irq(void);
+
+extern void *cml_heap;
+extern void *cml_stack;
+extern void *cml_stackend;
+
+void cml_exit(int arg) {
+    microkit_dbg_puts("This should not happen...\n");
+}
+
+void init_pnk_mem() {
+    /* Define region ranges */
+    cml_heap = cml_memory;
+    cml_stack = cml_heap + CML_HEAP_SZ;
+    cml_stackend = cml_stack + CML_STACK_SZ
+}
+
+void init_pnk_data() {
+    /* To make pancake aware of some globals */
+    uintptr_t *heap = (uintptr_t *) cml_heap;
+    heap[0] = (uintptr_t) eth;
+    heap[1] = (uintptr_t) &irq_mask;
+    /* reserve heap[2] for transporting hardware register value */
+    heap[3] = (uintptr_t) &rx_queue;
+    heap[4] = (uintptr_t) &tx_queue;
+    heap[5] = (uintptr_t) &rx;
+    heap[6] = (uintptr_t) &tx;
+}
+
+/* Hardware constructs and helpers; TODO: integrate into pancake? */
 /* HW ring descriptor (shared with device) */
 struct descriptor {
     uint16_t len;
@@ -58,8 +99,10 @@ net_queue_handle_t tx_queue;
 #define MAX_PACKET_SIZE     1536
 
 volatile struct enet_regs *eth;
-uint32_t irq_mask = IRQ_MASK;
+/* TODO: changed irq_mask to 64 bit from 32 */
+uint64_t irq_mask = IRQ_MASK;
 
+/* TODO: move elsewhere for better FFI access */
 static inline bool hw_ring_full(hw_ring_t *ring, size_t ring_size)
 {
     return !((ring->tail - ring->head + 1) % ring_size);
@@ -320,20 +363,25 @@ static void eth_setup(void)
 
 void init(void)
 {
+    /* TODO: move eth_setup to pancake? non-urgent */
     eth_setup();
+    init_pnk_mem();
+    init_pnk_data();
 
+    /* Implementations in pancake also exist */
     net_queue_init(&rx_queue, (net_queue_t *)rx_free, (net_queue_t *)rx_active, NET_RX_QUEUE_SIZE_DRIV);
     net_queue_init(&tx_queue, (net_queue_t *)tx_free, (net_queue_t *)tx_active, NET_TX_QUEUE_SIZE_DRIV);
 
-    rx_provide();
-    tx_provide();
+    pnk_rx_provide();
+    pnk_tx_provide();
 }
 
+/* notified calls corresponding pancake handlers */
 void notified(microkit_channel ch)
 {
     switch (ch) {
     case IRQ_CH:
-        handle_irq();
+        pnk_handle_irq();
         /*
          * Delay calling into the kernel to ack the IRQ until the next loop
          * in the microkit event handler loop.
@@ -341,10 +389,10 @@ void notified(microkit_channel ch)
         microkit_irq_ack_delayed(ch);
         break;
     case RX_CH:
-        rx_provide();
+        pnk_rx_provide();
         break;
     case TX_CH:
-        tx_provide();
+        pnk_tx_provide();
         break;
     default:
         sddf_dprintf("ETH|LOG: received notification on unexpected channel: %u\n", ch);
