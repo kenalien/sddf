@@ -13,20 +13,21 @@
 #include <sddf/util/fence.h>
 #include <sddf/util/util.h>
 
+/* For pancake: changed integer types to use word-sized uint64_t instead of 16/32 bit */
 typedef struct net_buff_desc {
     /* offset of buffer within buffer memory region or io address of buffer */
     uint64_t io_or_offset;
     /* length of data inside buffer */
-    uint16_t len;
+    uint64_t len;
 } net_buff_desc_t;
 
 typedef struct net_queue {
     /* index to insert at */
-    uint16_t tail;
+    uint64_t tail;
     /* index to remove from */
-    uint16_t head;
+    uint64_t head;
     /* flag to indicate whether consumer requires signalling */
-    uint32_t consumer_signalled;
+    uint64_t consumer_signalled;
     /* buffer descripter array */
     net_buff_desc_t buffers[];
 } net_queue_t;
@@ -37,8 +38,9 @@ typedef struct net_queue_handle {
     /* filled buffers */
     net_queue_t *active;
     /* size of the queues */
-    uint32_t size;
+    uint64_t size;
 } net_queue_handle_t;
+
 
 /**
  * Get the number of buffers enqueued into a queue.
@@ -47,7 +49,7 @@ typedef struct net_queue_handle {
  *
  * @return number of buffers enqueued into a queue.
  */
-static inline uint32_t net_queue_size(net_queue_t *queue)
+static inline uint64_t net_queue_size(net_queue_t *queue)
 {
     return queue->tail - queue->head;
 }
@@ -215,7 +217,7 @@ static inline void net_queue_init(net_queue_handle_t *queue, net_queue_t *free, 
  */
 static inline void net_buffers_init(net_queue_handle_t *queue, uintptr_t base_addr)
 {
-    for (uint32_t i = 0; i < queue->size - 1; i++) {
+    for (uint64_t i = 0; i < queue->size - 1; i++) {
         net_buff_desc_t buffer = {(NET_BUFFER_SIZE * i) + base_addr, 0};
         int err = net_enqueue_free(queue, buffer);
         assert(!err);
